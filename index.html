@@ -9,23 +9,22 @@
 <body>
 
   <div id="start-overlay">
-    <div id="start-text">click to enter the dark</div>
+    <div id="start-text">loading…</div>
   </div>
 
   <div id="flashlight-mask">
     <div id="lyrics-track">
       <div class="lyric-line placeholder">no song loaded yet</div>
     </div>
+  </div>
 
-    <div id="upload-zone">
-      <button id="upload-btn" type="button">+ add your own song</button>
-      <button id="clear-uploads-btn" type="button" class="secondary">clear my uploads</button>
-      <input type="file" id="upload-input" accept="audio/*" multiple hidden>
-    </div>
+  <div id="upload-zone">
+    <button id="upload-btn" type="button">+ add your own song</button>
+    <button id="clear-uploads-btn" type="button" class="secondary">clear my uploads</button>
+    <input type="file" id="upload-input" accept="audio/*" multiple hidden>
   </div>
 
   <div id="cursor-glow"></div>
-  <div id="cursor-dot"></div>
 
   <audio id="player" preload="auto"></audio>
 
