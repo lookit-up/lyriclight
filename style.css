@@ -1,125 +1,39 @@
-:root{
-  --mx: 50vw;
-  --my: 50vh;
-  --core: 55px;
-  --fade: 230px;
-}
-
-*{ margin:0; padding:0; box-sizing:border-box; }
-
-html, body{
-  width:100%; height:100%;
-  background:#000;
-  overflow:hidden;
-  cursor: none;
-}
-
-body, button{
-  font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
-}
-
-/* ---------- start overlay (needed so audio is allowed to autoplay) ---------- */
-#start-overlay{
-  position:fixed; inset:0;
-  background:#000;
-  display:flex; align-items:center; justify-content:center;
-  z-index:100;
-  cursor:pointer;
-  transition:opacity .6s ease;
-}
-#start-overlay.hidden{
-  opacity:0;
-  pointer-events:none;
-}
-#start-text{
-  color:#555;
-  font-size:14px;
-  letter-spacing:.14em;
-  text-transform:uppercase;
-  font-weight:300;
-}
-
-/* ---------- flashlight mask layer ---------- */
-#flashlight-mask{
-  position:fixed;
-  inset:0;
-  overflow:hidden;
-  -webkit-mask-image: radial-gradient(circle at var(--mx) var(--my),
-      rgba(0,0,0,1) 0,
-      rgba(0,0,0,1) var(--core),
-      rgba(0,0,0,0) var(--fade));
-  mask-image: radial-gradient(circle at var(--mx) var(--my),
-      rgba(0,0,0,1) 0,
-      rgba(0,0,0,1) var(--core),
-      rgba(0,0,0,0) var(--fade));
-}
-
-#lyrics-track{
+#upload-zone{
   position:absolute;
-  top:50%; left:50%;
-  transform:translate(-50%, -50%);
-  width:100%;
+  right:40px;
+  bottom:40px;
   display:flex;
   flex-direction:column;
-  align-items:center;
-  gap:2.2rem;
-  transition: transform .5s cubic-bezier(.2,.7,.3,1);
-  will-change: transform;
-  padding: 50vh 5vw;
+  align-items:flex-end;
+  gap:10px;
 }
 
-.lyric-line{
-  color:#c9c9c9;
-  font-weight:300;
-  font-size:clamp(18px, 3vw, 32px);
-  letter-spacing:.01em;
-  text-align:center;
-  opacity:.45;
-  transition:opacity .4s ease, color .4s ease, filter .4s ease;
-  max-width:70ch;
+#upload-zone button{
+  background:none;
+  border:1px solid #444;
+  color:#ccc;
+  font-size:12px;
+  letter-spacing:.05em;
+  padding:9px 14px;
+  border-radius:2px;
+  cursor:pointer;
+  font-family:inherit;
+  transition:border-color .2s ease, color .2s ease;
 }
 
-.lyric-line.active{
-  color:#f2f2f2;
-  opacity:1;
+#upload-zone button:hover{
+  border-color:#ccc;
+  color:#fff;
 }
 
-.lyric-line.placeholder{
-  color:#444;
-  font-size:16px;
-  letter-spacing:.08em;
-  text-transform:uppercase;
+#upload-zone button.secondary{
+  border-color:#333;
+  color:#777;
+  font-size:11px;
+  padding:7px 12px;
 }
 
-/* ---------- custom cursor ---------- */
-#cursor-dot{
-  position:fixed;
-  top:0; left:0;
-  width:6px; height:6px;
-  margin:-3px 0 0 -3px;
-  background:#fff;
-  border-radius:50%;
-  pointer-events:none;
-  z-index:50;
-  transform: translate(var(--px, 0px), var(--py, 0px));
-  will-change: transform;
-}
-
-#cursor-glow{
-  position:fixed;
-  top:0; left:0;
-  width: calc(var(--fade) * 2);
-  height: calc(var(--fade) * 2);
-  margin-top: calc(var(--fade) * -1);
-  margin-left: calc(var(--fade) * -1);
-  border-radius:50%;
-  pointer-events:none;
-  z-index:40;
-  background: radial-gradient(circle,
-      rgba(255,255,255,.9) 0,
-      rgba(255,255,255,.18) var(--core),
-      rgba(255,255,255,.05) 45%,
-      rgba(255,255,255,0) 70%);
-  transform: translate(var(--px, 0px), var(--py, 0px));
-  will-change: transform;
+#upload-zone button.secondary:hover{
+  border-color:#888;
+  color:#bbb;
 }
