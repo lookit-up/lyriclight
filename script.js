@@ -5,8 +5,9 @@
   const audio = document.getElementById('player');
   const track = document.getElementById('lyrics-track');
   const startOverlay = document.getElementById('start-overlay');
-  const cursorDot = document.getElementById('cursor-dot');
+  const startText = document.getElementById('start-text');
   const cursorGlow = document.getElementById('cursor-glow');
+  const uploadZone = document.getElementById('upload-zone');
   const uploadBtn = document.getElementById('upload-btn');
   const uploadInput = document.getElementById('upload-input');
   const clearUploadsBtn = document.getElementById('clear-uploads-btn');
@@ -16,22 +17,37 @@
   let currentSong = null;
   let currentLyrics = [];
   let activeIndex = -1;
+  let mouseX = window.innerWidth / 2;
+  let mouseY = window.innerHeight / 2;
+
+  const FADE = 230; // must match --fade in CSS
 
   // ---------------- cursor / flashlight following ----------------
   function moveLight(x, y) {
+    mouseX = x; mouseY = y;
     root.style.setProperty('--mx', x + 'px');
     root.style.setProperty('--my', y + 'px');
-    cursorDot.style.setProperty('--px', x + 'px');
-    cursorDot.style.setProperty('--py', y + 'px');
     cursorGlow.style.setProperty('--px', x + 'px');
     cursorGlow.style.setProperty('--py', y + 'px');
+    updateUploadVisibility();
   }
   window.addEventListener('mousemove', e => moveLight(e.clientX, e.clientY));
   window.addEventListener('touchmove', e => {
     const t = e.touches[0];
     if (t) moveLight(t.clientX, t.clientY);
   }, { passive: true });
-  moveLight(window.innerWidth / 2, window.innerHeight / 2);
+  moveLight(mouseX, mouseY);
+
+  // upload zone visibility is driven by JS distance-check, NOT a shared css mask,
+  // so it's never subject to browsers blocking clicks on masked-out areas
+  function updateUploadVisibility() {
+    const rect = uploadZone.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const dist = Math.hypot(mouseX - cx, mouseY - cy);
+    uploadZone.classList.toggle('lit', dist < FADE);
+  }
+  window.addEventListener('resize', updateUploadVisibility);
 
   // ================= IndexedDB (local-only upload storage) =================
   const DB_NAME = 'flashlight-player';
@@ -40,14 +56,11 @@
   function openDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = () => {
-        req.result.createObjectStore(STORE, { keyPath: 'id' });
-      };
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
   }
-
   async function idbAdd(record) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -57,7 +70,6 @@
       tx.onerror = () => reject(tx.error);
     });
   }
-
   async function idbGetAll() {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -67,7 +79,6 @@
       req.onerror = () => reject(req.error);
     });
   }
-
   async function idbClear() {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -85,16 +96,12 @@
       window.jsmediatags.read(source, {
         onSuccess: (tag) => {
           const t = tag.tags || {};
-          resolve({
-            artist: (t.artist || '').trim(),
-            title: (t.title || '').trim()
-          });
+          resolve({ artist: (t.artist || '').trim(), title: (t.title || '').trim() });
         },
         onError: () => resolve(null)
       });
     });
   }
-
   async function resolveMeta(song) {
     if (song.metaResolved) return song;
     const source = song.source === 'local' ? song.blob : song.file;
@@ -137,7 +144,6 @@
     }
     const params = new URLSearchParams({ track_name: song.title || song.name });
     if (song.artist) params.set('artist_name', song.artist);
-
     try {
       const res = await fetch('https://lrclib.net/api/search?' + params.toString());
       if (!res.ok) throw new Error('lrclib request failed');
@@ -221,7 +227,6 @@
     }
     return a;
   }
-
   function freshQueue(avoidFirst) {
     let a = shuffle(songs);
     if (a.length > 1 && avoidFirst && a[0].file === avoidFirst.file) {
@@ -236,8 +241,7 @@
     audio.src = song.file;
     currentLyrics = [];
     renderLyrics([], 'loading');
-
-    audio.play().catch(() => {});
+    audio.play().catch(err => console.warn('Playback blocked:', err));
 
     await resolveMeta(song);
     document.title = song.title || song.name || 'now playing';
@@ -270,6 +274,9 @@
 
   audio.addEventListener('ended', playNext);
   audio.addEventListener('timeupdate', updateActiveLine);
+  audio.addEventListener('error', () => {
+    console.error('Audio failed to load:', audio.src);
+  });
 
   // ================= invisible controls =================
   window.addEventListener('keydown', e => {
@@ -295,64 +302,4 @@
       blob: record.blob,
       name: record.name,
       artist: '',
-      title: record.name.replace(/\.[^.]+$/, ''),
-      metaResolved: false
-    };
-  }
-
-  async function handleUploadFiles(fileList) {
-    const files = Array.from(fileList);
-    for (const file of files) {
-      const record = {
-        id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2),
-        name: file.name,
-        blob: file,
-        addedAt: Date.now()
-      };
-      await idbAdd(record);
-      const song = songFromUploadRecord(record);
-      songs.push(song);
-      queue.push(song); // guaranteed to come up soon, without breaking current shuffle order
-    }
-  }
-
-  uploadBtn.addEventListener('click', () => uploadInput.click());
-  uploadInput.addEventListener('change', async (e) => {
-    if (e.target.files && e.target.files.length) {
-      await handleUploadFiles(e.target.files);
-    }
-    uploadInput.value = '';
-  });
-
-  clearUploadsBtn.addEventListener('click', async () => {
-    await idbClear();
-    songs = songs.filter(s => s.source !== 'local');
-    queue = queue.filter(s => s.source !== 'local');
-  });
-
-  // ================= boot =================
-  async function init() {
-    const res = await fetch('songs.php');
-    const hosted = (await res.json()).map(s => ({ ...s, source: 'hosted', metaResolved: false }));
-
-    let local = [];
-    try {
-      const records = await idbGetAll();
-      local = records.map(songFromUploadRecord);
-    } catch (e) {
-      console.warn('IndexedDB unavailable:', e);
-    }
-
-    songs = [...hosted, ...local];
-    if (songs.length === 0) return;
-    queue = freshQueue(null);
-  }
-
-  init();
-
-  startOverlay.addEventListener('click', () => {
-    startOverlay.classList.add('hidden');
-    if (queue.length > 0) playNext();
-  }, { once: true });
-
-})();
+      title: record.name.replace(/\.[^.]+
