@@ -16,6 +16,12 @@
     <div id="lyrics-track">
       <div class="lyric-line placeholder">no song loaded yet</div>
     </div>
+
+    <div id="upload-zone">
+      <button id="upload-btn" type="button">+ add your own song</button>
+      <button id="clear-uploads-btn" type="button" class="secondary">clear my uploads</button>
+      <input type="file" id="upload-input" accept="audio/*" multiple hidden>
+    </div>
   </div>
 
   <div id="cursor-glow"></div>
@@ -23,6 +29,7 @@
 
   <audio id="player" preload="auto"></audio>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
