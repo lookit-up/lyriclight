@@ -7,6 +7,9 @@
   const startOverlay = document.getElementById('start-overlay');
   const cursorDot = document.getElementById('cursor-dot');
   const cursorGlow = document.getElementById('cursor-glow');
+  const uploadBtn = document.getElementById('upload-btn');
+  const uploadInput = document.getElementById('upload-input');
+  const clearUploadsBtn = document.getElementById('clear-uploads-btn');
 
   let songs = [];
   let queue = [];
@@ -23,21 +26,92 @@
     cursorGlow.style.setProperty('--px', x + 'px');
     cursorGlow.style.setProperty('--py', y + 'px');
   }
-
   window.addEventListener('mousemove', e => moveLight(e.clientX, e.clientY));
   window.addEventListener('touchmove', e => {
     const t = e.touches[0];
     if (t) moveLight(t.clientX, t.clientY);
   }, { passive: true });
-
   moveLight(window.innerWidth / 2, window.innerHeight / 2);
 
-  // ---------------- LRC parsing ----------------
+  // ================= IndexedDB (local-only upload storage) =================
+  const DB_NAME = 'flashlight-player';
+  const STORE = 'uploads';
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore(STORE, { keyPath: 'id' });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function idbAdd(record) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function idbGetAll() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function idbClear() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // ================= ID3 tag auto-detection =================
+  function readTags(source) {
+    return new Promise((resolve) => {
+      if (!window.jsmediatags) { resolve(null); return; }
+      window.jsmediatags.read(source, {
+        onSuccess: (tag) => {
+          const t = tag.tags || {};
+          resolve({
+            artist: (t.artist || '').trim(),
+            title: (t.title || '').trim()
+          });
+        },
+        onError: () => resolve(null)
+      });
+    });
+  }
+
+  async function resolveMeta(song) {
+    if (song.metaResolved) return song;
+    const source = song.source === 'local' ? song.blob : song.file;
+    const tags = await readTags(source);
+    if (tags && (tags.artist || tags.title)) {
+      if (tags.artist) song.artist = tags.artist;
+      if (tags.title) song.title = tags.title;
+    }
+    song.metaResolved = true;
+    return song;
+  }
+
+  // ================= LRC parsing =================
   function parseLRC(text) {
     const timeExp = /\[(\d{2}):(\d{2}(?:\.\d{1,2})?)\]/g;
     const lines = text.split('\n');
     const result = [];
-
     for (const raw of lines) {
       const times = [];
       let match;
@@ -54,15 +128,14 @@
     return result;
   }
 
-  // ---------------- lyric fetching (lrclib.net, client-side, free) ----------------
+  // ================= lyric fetching (lrclib.net) =================
   async function fetchLyricsFor(song) {
     const cacheKey = 'lyriccache:' + song.artist + '::' + song.title;
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      try { return JSON.parse(cached); } catch (e) { /* corrupt cache, ignore */ }
+      try { return JSON.parse(cached); } catch (e) {}
     }
-
-    const params = new URLSearchParams({ track_name: song.title });
+    const params = new URLSearchParams({ track_name: song.title || song.name });
     if (song.artist) params.set('artist_name', song.artist);
 
     try {
@@ -73,12 +146,8 @@
         localStorage.setItem(cacheKey, JSON.stringify(null));
         return null;
       }
-
       const best = results.find(r => r.syncedLyrics) || results[0];
-      const data = {
-        synced: best.syncedLyrics || null,
-        plain: best.plainLyrics || null
-      };
+      const data = { synced: best.syncedLyrics || null, plain: best.plainLyrics || null };
       localStorage.setItem(cacheKey, JSON.stringify(data));
       return data;
     } catch (e) {
@@ -87,11 +156,10 @@
     }
   }
 
-  // ---------------- rendering ----------------
+  // ================= rendering =================
   function renderLyrics(lines, state) {
     track.innerHTML = '';
     activeIndex = -1;
-
     if (state === 'loading') {
       const div = document.createElement('div');
       div.className = 'lyric-line placeholder';
@@ -106,7 +174,6 @@
       track.appendChild(div);
       return;
     }
-
     lines.forEach(line => {
       const div = document.createElement('div');
       div.className = 'lyric-line';
@@ -125,7 +192,6 @@
     }
     if (idx === activeIndex) return;
     activeIndex = idx;
-
     const children = track.children;
     for (let i = 0; i < children.length; i++) {
       children[i].classList.toggle('active', i === idx);
@@ -137,20 +203,16 @@
     }
   }
 
-  // build naive evenly-spaced timings when only plain (unsynced) lyrics exist
   function buildNaiveTimings(plainText) {
     const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
     const dur = (audio.duration && isFinite(audio.duration)) ? audio.duration : 180;
     const pad = Math.min(3, dur * 0.05);
     const start = pad;
     const span = Math.max(dur - pad * 2, 1);
-    return lines.map((text, i) => ({
-      time: start + (span * i / lines.length),
-      text
-    }));
+    return lines.map((text, i) => ({ time: start + (span * i / lines.length), text }));
   }
 
-  // ---------------- playback / shuffle ----------------
+  // ================= playback / shuffle =================
   function shuffle(arr) {
     const a = arr.slice();
     for (let i = a.length - 1; i > 0; i--) {
@@ -171,16 +233,17 @@
 
   async function loadSong(song) {
     currentSong = song;
-    document.title = song.title || 'now playing';
     audio.src = song.file;
     currentLyrics = [];
     renderLyrics([], 'loading');
 
     audio.play().catch(() => {});
 
-    const data = await fetchLyricsFor(song);
+    await resolveMeta(song);
+    document.title = song.title || song.name || 'now playing';
+    if (currentSong !== song) return;
 
-    // song may have changed (user skipped) while we were fetching
+    const data = await fetchLyricsFor(song);
     if (currentSong !== song) return;
 
     if (data && data.synced) {
@@ -192,20 +255,15 @@
         currentLyrics = buildNaiveTimings(data.plain);
         renderLyrics(currentLyrics);
       };
-      if (audio.readyState >= 1 && isFinite(audio.duration)) {
-        applyNaive();
-      } else {
-        audio.addEventListener('loadedmetadata', applyNaive, { once: true });
-      }
+      if (audio.readyState >= 1 && isFinite(audio.duration)) applyNaive();
+      else audio.addEventListener('loadedmetadata', applyNaive, { once: true });
     } else {
       renderLyrics([], 'none');
     }
   }
 
   function playNext() {
-    if (queue.length === 0) {
-      queue = freshQueue(currentSong);
-    }
+    if (queue.length === 0) queue = freshQueue(currentSong);
     const next = queue.shift();
     loadSong(next);
   }
@@ -213,7 +271,7 @@
   audio.addEventListener('ended', playNext);
   audio.addEventListener('timeupdate', updateActiveLine);
 
-  // ---------------- invisible controls ----------------
+  // ================= invisible controls =================
   window.addEventListener('keydown', e => {
     if (e.code === 'Space') {
       e.preventDefault();
@@ -227,10 +285,65 @@
     }
   });
 
-  // ---------------- boot ----------------
+  // ================= uploads (local-only, IndexedDB) =================
+  function songFromUploadRecord(record) {
+    const url = URL.createObjectURL(record.blob);
+    return {
+      source: 'local',
+      id: record.id,
+      file: url,
+      blob: record.blob,
+      name: record.name,
+      artist: '',
+      title: record.name.replace(/\.[^.]+$/, ''),
+      metaResolved: false
+    };
+  }
+
+  async function handleUploadFiles(fileList) {
+    const files = Array.from(fileList);
+    for (const file of files) {
+      const record = {
+        id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+        name: file.name,
+        blob: file,
+        addedAt: Date.now()
+      };
+      await idbAdd(record);
+      const song = songFromUploadRecord(record);
+      songs.push(song);
+      queue.push(song); // guaranteed to come up soon, without breaking current shuffle order
+    }
+  }
+
+  uploadBtn.addEventListener('click', () => uploadInput.click());
+  uploadInput.addEventListener('change', async (e) => {
+    if (e.target.files && e.target.files.length) {
+      await handleUploadFiles(e.target.files);
+    }
+    uploadInput.value = '';
+  });
+
+  clearUploadsBtn.addEventListener('click', async () => {
+    await idbClear();
+    songs = songs.filter(s => s.source !== 'local');
+    queue = queue.filter(s => s.source !== 'local');
+  });
+
+  // ================= boot =================
   async function init() {
     const res = await fetch('songs.php');
-    songs = await res.json();
+    const hosted = (await res.json()).map(s => ({ ...s, source: 'hosted', metaResolved: false }));
+
+    let local = [];
+    try {
+      const records = await idbGetAll();
+      local = records.map(songFromUploadRecord);
+    } catch (e) {
+      console.warn('IndexedDB unavailable:', e);
+    }
+
+    songs = [...hosted, ...local];
     if (songs.length === 0) return;
     queue = freshQueue(null);
   }
