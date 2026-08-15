@@ -1,6 +1,15 @@
 (function () {
   "use strict";
 
+  // ============================================================
+  // FILL THESE IN — your GitHub username, repo name, and branch
+  // ============================================================
+  const GH_USER = "lookit-up";
+  const GH_REPO = "lyriclight";
+  const GH_BRANCH = "main";
+  const AUDIO_PATH = "audios";
+  // ============================================================
+
   const root = document.documentElement;
   const audio = document.getElementById('player');
   const track = document.getElementById('lyrics-track');
@@ -12,6 +21,8 @@
   const uploadInput = document.getElementById('upload-input');
   const clearUploadsBtn = document.getElementById('clear-uploads-btn');
 
+  startText.style.cssText = 'max-width:80vw; text-align:center; padding:0 20px;';
+
   let songs = [];
   let queue = [];
   let currentSong = null;
@@ -20,7 +31,7 @@
   let mouseX = window.innerWidth / 2;
   let mouseY = window.innerHeight / 2;
 
-  const FADE = 230; // must match --fade in CSS
+  const FADE = 230; // must match --fade in style.css
 
   // ---------------- cursor / flashlight following ----------------
   function moveLight(x, y) {
@@ -38,8 +49,6 @@
   }, { passive: true });
   moveLight(mouseX, mouseY);
 
-  // upload zone visibility is driven by JS distance-check, NOT a shared css mask,
-  // so it's never subject to browsers blocking clicks on masked-out areas
   function updateUploadVisibility() {
     const rect = uploadZone.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
@@ -302,4 +311,125 @@
       blob: record.blob,
       name: record.name,
       artist: '',
-      title: record.name.replace(/\.[^.]+
+      title: record.name.replace(/\.[^.]+$/, ''),
+      metaResolved: false
+    };
+  }
+
+  async function handleUploadFiles(fileList) {
+    const files = Array.from(fileList);
+    for (const file of files) {
+      const record = {
+        id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+        name: file.name,
+        blob: file,
+        addedAt: Date.now()
+      };
+      await idbAdd(record);
+      const song = songFromUploadRecord(record);
+      songs.push(song);
+      queue.push(song);
+    }
+  }
+
+  uploadBtn.addEventListener('click', () => uploadInput.click());
+  uploadInput.addEventListener('change', async (e) => {
+    if (e.target.files && e.target.files.length) {
+      await handleUploadFiles(e.target.files);
+    }
+    uploadInput.value = '';
+  });
+  clearUploadsBtn.addEventListener('click', async () => {
+    await idbClear();
+    songs = songs.filter(s => s.source !== 'local');
+    queue = queue.filter(s => s.source !== 'local');
+  });
+
+  // ================= hosted song list — via GitHub API (no PHP needed) =================
+  const GH_CACHE_KEY = `ghsongs:${GH_USER}/${GH_REPO}/${GH_BRANCH}/${AUDIO_PATH}`;
+  const GH_CACHE_TTL = 10 * 60 * 1000; // 10 minutes, keeps us under GitHub's API rate limit
+  const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'm4a'];
+
+  async function fetchHostedSongs() {
+    const cached = localStorage.getItem(GH_CACHE_KEY);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.at < GH_CACHE_TTL) return parsed.songs;
+      } catch (e) {}
+    }
+
+    const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${AUDIO_PATH}?ref=${GH_BRANCH}`;
+    const res = await fetch(url, { headers: { Accept: 'application/vnd.github.v3+json' } });
+
+    if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error(`repo/folder not found — check GH_USER, GH_REPO, GH_BRANCH, and that "${AUDIO_PATH}/" exists in the repo`);
+      }
+      if (res.status === 403) {
+        throw new Error('GitHub API rate limit hit — wait a bit and reload');
+      }
+      throw new Error(`GitHub API returned ${res.status}`);
+    }
+
+    const items = await res.json();
+    if (!Array.isArray(items)) {
+      throw new Error('unexpected response from GitHub API — is AUDIO_PATH actually a folder?');
+    }
+
+    const list = items
+      .filter(item => item.type === 'file' && AUDIO_EXTS.includes(item.name.split('.').pop().toLowerCase()))
+      .map(item => {
+        const base = item.name.replace(/\.[^.]+$/, '');
+        let artist = '', title = base;
+        if (base.includes(' - ')) {
+          const parts = base.split(' - ');
+          artist = parts.shift().trim();
+          title = parts.join(' - ').trim();
+        }
+        return { file: item.download_url, artist, title, name: item.name };
+      });
+
+    localStorage.setItem(GH_CACHE_KEY, JSON.stringify({ at: Date.now(), songs: list }));
+    return list;
+  }
+
+  // ================= boot =================
+  async function init() {
+    let hosted = [];
+    try {
+      const list = await fetchHostedSongs();
+      hosted = list.map(s => ({ ...s, source: 'hosted', metaResolved: false }));
+    } catch (e) {
+      startText.textContent = 'could not load songs from GitHub — ' + e.message;
+      console.error(e);
+      return;
+    }
+
+    let local = [];
+    try {
+      const records = await idbGetAll();
+      local = records.map(songFromUploadRecord);
+    } catch (e) {
+      console.warn('IndexedDB unavailable:', e);
+    }
+
+    songs = [...hosted, ...local];
+    queue = songs.length ? freshQueue(null) : [];
+
+    if (songs.length === 0) {
+      startText.textContent = `no songs found in ${GH_USER}/${GH_REPO}/${AUDIO_PATH} — add mp3 files there`;
+    } else {
+      startText.textContent = 'click to enter the dark (' + songs.length + ' songs found)';
+      startOverlay.addEventListener('click', onStartClick, { once: true });
+    }
+  }
+
+  function onStartClick() {
+    startOverlay.classList.add('hidden');
+    if (queue.length > 0) playNext();
+  }
+
+  init();
+
+})();
