@@ -30,7 +30,6 @@
     if (t) moveLight(t.clientX, t.clientY);
   }, { passive: true });
 
-  // start centered
   moveLight(window.innerWidth / 2, window.innerHeight / 2);
 
   // ---------------- LRC parsing ----------------
@@ -55,16 +54,59 @@
     return result;
   }
 
-  function renderLyrics(lines) {
+  // ---------------- lyric fetching (lrclib.net, client-side, free) ----------------
+  async function fetchLyricsFor(song) {
+    const cacheKey = 'lyriccache:' + song.artist + '::' + song.title;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      try { return JSON.parse(cached); } catch (e) { /* corrupt cache, ignore */ }
+    }
+
+    const params = new URLSearchParams({ track_name: song.title });
+    if (song.artist) params.set('artist_name', song.artist);
+
+    try {
+      const res = await fetch('https://lrclib.net/api/search?' + params.toString());
+      if (!res.ok) throw new Error('lrclib request failed');
+      const results = await res.json();
+      if (!Array.isArray(results) || results.length === 0) {
+        localStorage.setItem(cacheKey, JSON.stringify(null));
+        return null;
+      }
+
+      const best = results.find(r => r.syncedLyrics) || results[0];
+      const data = {
+        synced: best.syncedLyrics || null,
+        plain: best.plainLyrics || null
+      };
+      localStorage.setItem(cacheKey, JSON.stringify(data));
+      return data;
+    } catch (e) {
+      console.warn('Lyric lookup failed:', e);
+      return null;
+    }
+  }
+
+  // ---------------- rendering ----------------
+  function renderLyrics(lines, state) {
     track.innerHTML = '';
     activeIndex = -1;
-    if (lines.length === 0) {
+
+    if (state === 'loading') {
       const div = document.createElement('div');
       div.className = 'lyric-line placeholder';
-      div.textContent = 'no lyrics for this one';
+      div.textContent = 'searching for lyrics…';
       track.appendChild(div);
       return;
     }
+    if (state === 'none' || lines.length === 0) {
+      const div = document.createElement('div');
+      div.className = 'lyric-line placeholder';
+      div.textContent = 'no lyrics found for this one';
+      track.appendChild(div);
+      return;
+    }
+
     lines.forEach(line => {
       const div = document.createElement('div');
       div.className = 'lyric-line';
@@ -95,6 +137,19 @@
     }
   }
 
+  // build naive evenly-spaced timings when only plain (unsynced) lyrics exist
+  function buildNaiveTimings(plainText) {
+    const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
+    const dur = (audio.duration && isFinite(audio.duration)) ? audio.duration : 180;
+    const pad = Math.min(3, dur * 0.05);
+    const start = pad;
+    const span = Math.max(dur - pad * 2, 1);
+    return lines.map((text, i) => ({
+      time: start + (span * i / lines.length),
+      text
+    }));
+  }
+
   // ---------------- playback / shuffle ----------------
   function shuffle(arr) {
     const a = arr.slice();
@@ -116,24 +171,35 @@
 
   async function loadSong(song) {
     currentSong = song;
-    document.title = song.title;
+    document.title = song.title || 'now playing';
     audio.src = song.file;
-
     currentLyrics = [];
-    renderLyrics([]);
-
-    if (song.lyrics) {
-      try {
-        const res = await fetch(song.lyrics);
-        if (res.ok) {
-          const text = await res.text();
-          currentLyrics = parseLRC(text);
-          renderLyrics(currentLyrics);
-        }
-      } catch (e) { /* no lyrics, that's fine */ }
-    }
+    renderLyrics([], 'loading');
 
     audio.play().catch(() => {});
+
+    const data = await fetchLyricsFor(song);
+
+    // song may have changed (user skipped) while we were fetching
+    if (currentSong !== song) return;
+
+    if (data && data.synced) {
+      currentLyrics = parseLRC(data.synced);
+      renderLyrics(currentLyrics);
+    } else if (data && data.plain) {
+      const applyNaive = () => {
+        if (currentSong !== song) return;
+        currentLyrics = buildNaiveTimings(data.plain);
+        renderLyrics(currentLyrics);
+      };
+      if (audio.readyState >= 1 && isFinite(audio.duration)) {
+        applyNaive();
+      } else {
+        audio.addEventListener('loadedmetadata', applyNaive, { once: true });
+      }
+    } else {
+      renderLyrics([], 'none');
+    }
   }
 
   function playNext() {
